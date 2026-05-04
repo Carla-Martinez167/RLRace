@@ -6,16 +6,20 @@ import numpy as np
 
 class RacingAntEnv(gym.Env):
     """
-    Entorno personalizado de carrera usando el robot Ant-v5 de MuJoCo.
+    Entorno personalizado de carrera usando Ant-v5.
 
     Objetivo:
-        El robot debe avanzar hasta x = 30 metros antes de 20 segundos.
+        Avanzar 30 metros en línea recta antes de 20 segundos.
 
-    Observación:
-        [x_position, x_velocity, distance_to_goal, elapsed_time_normalized, obs_original]
-
-    Acción:
-        La misma acción continua de Ant-v5.
+    Observación añadida:
+        x_position
+        y_position
+        x_velocity
+        y_velocity
+        distance_to_goal
+        lateral_deviation
+        elapsed_time_normalized
+        obs_original
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 20}
@@ -25,6 +29,7 @@ class RacingAntEnv(gym.Env):
 
         self.goal_distance = 30.0
         self.max_time = 20.0
+        self.max_lateral_deviation = 2.0
 
         self.env = gym.make("Ant-v5", render_mode=render_mode)
         self.unwrapped_env = self.env.unwrapped
@@ -40,8 +45,11 @@ class RacingAntEnv(gym.Env):
         extra_low = np.array(
             [
                 -np.inf,  # x_position
+                -np.inf,  # y_position
                 -np.inf,  # x_velocity
+                -np.inf,  # y_velocity
                 -np.inf,  # distance_to_goal
+                0.0,      # lateral_deviation
                 0.0       # elapsed_time_normalized
             ],
             dtype=np.float32
@@ -50,8 +58,11 @@ class RacingAntEnv(gym.Env):
         extra_high = np.array(
             [
                 np.inf,   # x_position
+                np.inf,   # y_position
                 np.inf,   # x_velocity
+                np.inf,   # y_velocity
                 np.inf,   # distance_to_goal
+                np.inf,   # lateral_deviation
                 1.0       # elapsed_time_normalized
             ],
             dtype=np.float32
@@ -68,32 +79,46 @@ class RacingAntEnv(gym.Env):
     def _get_x_position(self):
         return float(self.unwrapped_env.data.qpos[0])
 
+    def _get_y_position(self):
+        return float(self.unwrapped_env.data.qpos[1])
+
     def _get_x_velocity(self):
         return float(self.unwrapped_env.data.qvel[0])
+
+    def _get_y_velocity(self):
+        return float(self.unwrapped_env.data.qvel[1])
 
     def _get_original_obs(self):
         return self.unwrapped_env._get_obs().astype(np.float32)
 
     def _get_obs(self):
         x_position = self._get_x_position()
+        y_position = self._get_y_position()
         x_velocity = self._get_x_velocity()
+        y_velocity = self._get_y_velocity()
+
         distance_to_goal = self.goal_distance - x_position
+        lateral_deviation = abs(y_position)
+
         elapsed_time_normalized = min(
             (self.elapsed_steps * self.dt) / self.max_time,
             1.0
         )
 
-        original_obs = self._get_original_obs()
-
         custom_obs = np.array(
             [
                 x_position,
+                y_position,
                 x_velocity,
+                y_velocity,
                 distance_to_goal,
+                lateral_deviation,
                 elapsed_time_normalized
             ],
             dtype=np.float32
         )
+
+        original_obs = self._get_original_obs()
 
         return np.concatenate([custom_obs, original_obs]).astype(np.float32)
 
@@ -105,32 +130,46 @@ class RacingAntEnv(gym.Env):
         self.elapsed_steps += 1
 
         x_after = self._get_x_position()
+        y_after = self._get_y_position()
         x_velocity = self._get_x_velocity()
+        y_velocity = self._get_y_velocity()
 
         distance_moved = x_after - x_before
         distance_to_goal = self.goal_distance - x_after
+        lateral_deviation = abs(y_after)
         elapsed_time = self.elapsed_steps * self.dt
 
         reached_goal = x_after >= self.goal_distance
         time_limit_reached = elapsed_time >= self.max_time
+        too_far_from_lane = lateral_deviation > self.max_lateral_deviation
 
-        terminated = bool(reached_goal or original_terminated)
+        terminated = bool(reached_goal or original_terminated or too_far_from_lane)
         truncated = bool(time_limit_reached or original_truncated)
 
         reward = 0.0
 
-        # Recompensa por avanzar
+        # Recompensa por avanzar en X
         reward += 5.0 * distance_moved
 
         # Recompensa por velocidad hacia delante
         reward += 0.1 * x_velocity
 
+        # Penalización por desviarse lateralmente
+        reward -= 0.5 * lateral_deviation
+
+        # Penalización por velocidad lateral
+        reward -= 0.1 * abs(y_velocity)
+
         # Penalización por tiempo
         reward -= 0.01
 
-        # Penalización por alejarse o retroceder
+        # Penalización por retroceder
         if distance_moved < 0:
             reward -= 1.0
+
+        # Penalización si se sale demasiado de la línea recta
+        if too_far_from_lane:
+            reward -= 30.0
 
         # Bonificación por alcanzar la meta
         if reached_goal:
@@ -144,17 +183,20 @@ class RacingAntEnv(gym.Env):
         obs = self._get_obs()
 
         info["x_position"] = x_after
+        info["y_position"] = y_after
         info["x_velocity"] = x_velocity
+        info["y_velocity"] = y_velocity
         info["distance_to_goal"] = distance_to_goal
+        info["lateral_deviation"] = lateral_deviation
         info["elapsed_time"] = elapsed_time
         info["reached_goal"] = reached_goal
+        info["too_far_from_lane"] = too_far_from_lane
         info["original_reward"] = original_reward
 
         return obs, float(reward), terminated, truncated, info
 
     def reset(self, *, seed=None, options=None):
         self.elapsed_steps = 0
-        self.prev_x_position = 0.0
 
         _, info = self.env.reset(seed=seed, options=options)
 
@@ -163,10 +205,14 @@ class RacingAntEnv(gym.Env):
         obs = self._get_obs()
 
         info["x_position"] = self._get_x_position()
+        info["y_position"] = self._get_y_position()
         info["x_velocity"] = self._get_x_velocity()
+        info["y_velocity"] = self._get_y_velocity()
         info["distance_to_goal"] = self.goal_distance
+        info["lateral_deviation"] = abs(self._get_y_position())
         info["elapsed_time"] = 0.0
         info["reached_goal"] = False
+        info["too_far_from_lane"] = False
 
         return obs, info
 
@@ -189,24 +235,82 @@ except Exception:
 if __name__ == "__main__":
     env = gym.make("RacingAnt-v0", render_mode="human")
 
-    obs, info = env.reset()
+    num_episodes = 10
 
-    for step in range(1000):
-        action = env.action_space.sample()
+    successful_episodes = 0
+    failed_episodes = 0
 
-        obs, reward, terminated, truncated, info = env.step(action)
+    for episode in range(num_episodes):
+        obs, info = env.reset()
 
-        print(
-            f"step={step} | "
-            f"x={info['x_position']:.2f} | "
-            f"v={info['x_velocity']:.2f} | "
-            f"dist={info['distance_to_goal']:.2f} | "
-            f"reward={reward:.2f}"
-        )
+        total_reward = 0.0
+        max_x = 0.0
+        max_lateral_deviation = 0.0
 
-        if terminated or truncated:
-            print("Episodio terminado")
-            print(info)
-            obs, info = env.reset()
+        print(f"\n==============================")
+        print(f"EPISODIO {episode + 1}/{num_episodes}")
+        print(f"==============================")
+
+        for step in range(env.unwrapped.max_steps):
+            action = env.action_space.sample()
+
+            obs, reward, terminated, truncated, info = env.step(action)
+
+            total_reward += reward
+            max_x = max(max_x, info["x_position"])
+            max_lateral_deviation = max(
+                max_lateral_deviation,
+                info["lateral_deviation"]
+            )
+
+            if step % 20 == 0:
+                print(
+                    f"step={step:04d} | "
+                    f"t={info['elapsed_time']:.2f}s | "
+                    f"x={info['x_position']:.2f}m | "
+                    f"y={info['y_position']:.2f}m | "
+                    f"vx={info['x_velocity']:.2f}m/s | "
+                    f"dist={info['distance_to_goal']:.2f}m | "
+                    f"reward={reward:.2f}"
+                )
+
+            if terminated or truncated:
+                break
+
+        reached_goal = info["reached_goal"]
+        too_far_from_lane = info["too_far_from_lane"]
+        time_finished = info["elapsed_time"] >= env.unwrapped.max_time
+
+        if reached_goal:
+            successful_episodes += 1
+            result_message = "ÉXITO: el robot ha llegado a la meta."
+        else:
+            failed_episodes += 1
+
+            if too_far_from_lane:
+                result_message = "FALLO: el robot se ha salido de la pista."
+            elif time_finished:
+                result_message = "FALLO: el robot no ha llegado antes de 20 segundos."
+            else:
+                result_message = "FALLO: el episodio terminó por otra condición del entorno."
+
+        print("\nResultado del episodio:")
+        print(result_message)
+        print(f"Steps ejecutados: {step + 1}/{env.unwrapped.max_steps}")
+        print(f"Tiempo final: {info['elapsed_time']:.2f}s")
+        print(f"Posición final X: {info['x_position']:.2f}m")
+        print(f"Posición final Y: {info['y_position']:.2f}m")
+        print(f"Máxima X alcanzada: {max_x:.2f}m")
+        print(f"Máxima desviación lateral: {max_lateral_deviation:.2f}m")
+        print(f"Distancia restante: {info['distance_to_goal']:.2f}m")
+        print(f"Recompensa total: {total_reward:.2f}")
+
+    print("\n==============================")
+    print("RESUMEN FINAL")
+    print("==============================")
+    print(f"Episodios totales: {num_episodes}")
+    print(f"Episodios exitosos: {successful_episodes}")
+    print(f"Episodios fallidos: {failed_episodes}")
+    print(f"Tasa de éxito: {(successful_episodes / num_episodes) * 100:.2f}%")
 
     env.close()
