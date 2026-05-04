@@ -2,7 +2,8 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
 import numpy as np
-
+from stable_baselines3 import PPO
+from stable_baselines3.common.env_checker import check_env
 
 class RacingAntEnv(gym.Env):
     """
@@ -233,84 +234,120 @@ except Exception:
 
 
 if __name__ == "__main__":
-    env = gym.make("RacingAnt-v0", render_mode="human")
 
-    num_episodes = 10
+    TRAIN = True
+    TEST = True
 
-    successful_episodes = 0
-    failed_episodes = 0
+    model_path = "ppo_racing_ant"
 
-    for episode in range(num_episodes):
-        obs, info = env.reset()
+    if TRAIN:
+        train_env = RacingAntEnv(render_mode=None)
 
-        total_reward = 0.0
-        max_x = 0.0
-        max_lateral_deviation = 0.0
+        check_env(train_env, warn=True)
 
-        print(f"\n==============================")
-        print(f"EPISODIO {episode + 1}/{num_episodes}")
-        print(f"==============================")
+        model = PPO(
+            "MlpPolicy",
+            train_env,
+            learning_rate=3e-4,
+            n_steps=2048,
+            batch_size=64,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            ent_coef=0.01,
+            verbose=1,
+        )
 
-        for step in range(env.unwrapped.max_steps):
-            action = env.action_space.sample()
+        model.learn(total_timesteps=300_000)
 
-            obs, reward, terminated, truncated, info = env.step(action)
+        model.save(model_path)
 
-            total_reward += reward
-            max_x = max(max_x, info["x_position"])
-            max_lateral_deviation = max(
-                max_lateral_deviation,
-                info["lateral_deviation"]
-            )
+        train_env.close()
 
-            if step % 20 == 0:
-                print(
-                    f"step={step:04d} | "
-                    f"t={info['elapsed_time']:.2f}s | "
-                    f"x={info['x_position']:.2f}m | "
-                    f"y={info['y_position']:.2f}m | "
-                    f"vx={info['x_velocity']:.2f}m/s | "
-                    f"dist={info['distance_to_goal']:.2f}m | "
-                    f"reward={reward:.2f}"
+        print("Entrenamiento terminado.")
+        print(f"Modelo guardado en: {model_path}")
+
+    if TEST:
+        test_env = gym.make("RacingAnt-v0", render_mode="human")
+
+        model = PPO.load(model_path)
+
+        num_episodes = 5
+
+        successful_episodes = 0
+        failed_episodes = 0
+
+        for episode in range(num_episodes):
+            obs, info = test_env.reset()
+
+            total_reward = 0.0
+            max_x = 0.0
+            max_lateral_deviation = 0.0
+
+            print(f"\n==============================")
+            print(f"EPISODIO DE PRUEBA {episode + 1}/{num_episodes}")
+            print(f"==============================")
+
+            for step in range(test_env.unwrapped.max_steps):
+                action, _ = model.predict(obs, deterministic=True)
+
+                obs, reward, terminated, truncated, info = test_env.step(action)
+
+                total_reward += reward
+                max_x = max(max_x, info["x_position"])
+                max_lateral_deviation = max(
+                    max_lateral_deviation,
+                    info["lateral_deviation"]
                 )
 
-            if terminated or truncated:
-                break
+                if step % 20 == 0:
+                    print(
+                        f"step={step:04d} | "
+                        f"t={info['elapsed_time']:.2f}s | "
+                        f"x={info['x_position']:.2f}m | "
+                        f"y={info['y_position']:.2f}m | "
+                        f"vx={info['x_velocity']:.2f}m/s | "
+                        f"dist={info['distance_to_goal']:.2f}m | "
+                        f"reward={reward:.2f}"
+                    )
 
-        reached_goal = info["reached_goal"]
-        too_far_from_lane = info["too_far_from_lane"]
-        time_finished = info["elapsed_time"] >= env.unwrapped.max_time
+                if terminated or truncated:
+                    break
 
-        if reached_goal:
-            successful_episodes += 1
-            result_message = "ÉXITO: el robot ha llegado a la meta."
-        else:
-            failed_episodes += 1
+            reached_goal = info["reached_goal"]
+            too_far_from_lane = info["too_far_from_lane"]
+            time_finished = info["elapsed_time"] >= test_env.unwrapped.max_time
 
-            if too_far_from_lane:
-                result_message = "FALLO: el robot se ha salido de la pista."
-            elif time_finished:
-                result_message = "FALLO: el robot no ha llegado antes de 20 segundos."
+            if reached_goal:
+                successful_episodes += 1
+                result_message = "ÉXITO: el robot ha llegado a la meta."
             else:
-                result_message = "FALLO: el episodio terminó por otra condición del entorno."
+                failed_episodes += 1
 
-        print("\nResultado del episodio:")
-        print(result_message)
-        print(f"Steps ejecutados: {step + 1}/{env.unwrapped.max_steps}")
-        print(f"Tiempo final: {info['elapsed_time']:.2f}s")
-        print(f"Posición final X: {info['x_position']:.2f}m")
-        print(f"Posición final Y: {info['y_position']:.2f}m")
-        print(f"Máxima X alcanzada: {max_x:.2f}m")
-        print(f"Máxima desviación lateral: {max_lateral_deviation:.2f}m")
-        print(f"Distancia restante: {info['distance_to_goal']:.2f}m")
-        print(f"Recompensa total: {total_reward:.2f}")
+                if too_far_from_lane:
+                    result_message = "FALLO: el robot se ha salido de la pista."
+                elif time_finished:
+                    result_message = "FALLO: el robot no ha llegado antes de 20 segundos."
+                else:
+                    result_message = "FALLO: el episodio terminó por otra condición del entorno."
 
-    print("\n==============================")
-    print("RESUMEN FINAL")
-    print("==============================")
-    print(f"Episodios totales: {num_episodes}")
-    print(f"Episodios exitosos: {successful_episodes}")
-    print(f"Episodios fallidos: {failed_episodes}")
-    print(f"Tasa de éxito: {(successful_episodes / num_episodes) * 100:.2f}%")
+            print("\nResultado del episodio:")
+            print(result_message)
+            print(f"Steps ejecutados: {step + 1}/{test_env.unwrapped.max_steps}")
+            print(f"Tiempo final: {info['elapsed_time']:.2f}s")
+            print(f"Posición final X: {info['x_position']:.2f}m")
+            print(f"Posición final Y: {info['y_position']:.2f}m")
+            print(f"Máxima X alcanzada: {max_x:.2f}m")
+            print(f"Máxima desviación lateral: {max_lateral_deviation:.2f}m")
+            print(f"Distancia restante: {info['distance_to_goal']:.2f}m")
+            print(f"Recompensa total: {total_reward:.2f}")
 
-    env.close()
+        print("\n==============================")
+        print("RESUMEN FINAL DE PRUEBA")
+        print("==============================")
+        print(f"Episodios totales: {num_episodes}")
+        print(f"Episodios exitosos: {successful_episodes}")
+        print(f"Episodios fallidos: {failed_episodes}")
+        print(f"Tasa de éxito: {(successful_episodes / num_episodes) * 100:.2f}%")
+
+        test_env.close()
