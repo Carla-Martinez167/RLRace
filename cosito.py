@@ -1,13 +1,18 @@
+import os
+import time
+
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
 import numpy as np
+
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 
+
 class RacingAntEnv(gym.Env):
     """
-    Entorno personalizado de carrera usando Ant-v5.
+    Entorno personalizado de carrera usando Ant-v5 de MuJoCo.
 
     Objetivo:
         Avanzar 30 metros en línea recta antes de 20 segundos.
@@ -21,6 +26,9 @@ class RacingAntEnv(gym.Env):
         lateral_deviation
         elapsed_time_normalized
         obs_original
+
+    Acción:
+        La misma acción continua de Ant-v5.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 20}
@@ -70,8 +78,18 @@ class RacingAntEnv(gym.Env):
         )
 
         self.observation_space = spaces.Box(
-            low=np.concatenate([extra_low, original_obs_space.low.astype(np.float32)]),
-            high=np.concatenate([extra_high, original_obs_space.high.astype(np.float32)]),
+            low=np.concatenate(
+                [
+                    extra_low,
+                    original_obs_space.low.astype(np.float32)
+                ]
+            ),
+            high=np.concatenate(
+                [
+                    extra_high,
+                    original_obs_space.high.astype(np.float32)
+                ]
+            ),
             dtype=np.float32
         )
 
@@ -144,8 +162,16 @@ class RacingAntEnv(gym.Env):
         time_limit_reached = elapsed_time >= self.max_time
         too_far_from_lane = lateral_deviation > self.max_lateral_deviation
 
-        terminated = bool(reached_goal or original_terminated or too_far_from_lane)
-        truncated = bool(time_limit_reached or original_truncated)
+        terminated = bool(
+            reached_goal
+            or original_terminated
+            or too_far_from_lane
+        )
+
+        truncated = bool(
+            time_limit_reached
+            or original_truncated
+        )
 
         reward = 0.0
 
@@ -239,115 +265,243 @@ if __name__ == "__main__":
     TEST = True
 
     model_path = "ppo_racing_ant"
+    checkpoint_path = "ppo_racing_ant_checkpoint"
+
+    total_timesteps = 300_000
+
+    print("\n==============================")
+    print("CONFIGURACIÓN DEL ENTRENAMIENTO")
+    print("==============================")
+    print("Método de entrenamiento: PPO")
+    print("Nombre completo: Proximal Policy Optimization")
+    print("Política usada: MlpPolicy")
+    print("Entorno base: Ant-v5 de MuJoCo")
+    print("Entorno personalizado: RacingAnt-v0")
+    print("Objetivo: recorrer 30 metros antes de 20 segundos")
+    print("Tipo de acciones: continuas")
+    print(f"Timesteps de entrenamiento: {total_timesteps}")
+    print(f"Modelo final: {model_path}.zip")
+    print(f"Checkpoint de emergencia: {checkpoint_path}.zip")
+
+    training_finished_correctly = False
 
     if TRAIN:
-        train_env = RacingAntEnv(render_mode=None)
+        train_env = None
+        model = None
 
-        check_env(train_env, warn=True)
+        try:
+            print("\n==============================")
+            print("INICIO DEL ENTRENAMIENTO")
+            print("==============================")
 
-        model = PPO(
-            "MlpPolicy",
-            train_env,
-            learning_rate=3e-4,
-            n_steps=2048,
-            batch_size=64,
-            gamma=0.99,
-            gae_lambda=0.95,
-            clip_range=0.2,
-            ent_coef=0.01,
-            verbose=1,
-        )
+            train_env = RacingAntEnv(render_mode=None)
 
-        model.learn(total_timesteps=300_000)
+            check_env(train_env, warn=True)
 
-        model.save(model_path)
+            model = PPO(
+                "MlpPolicy",
+                train_env,
+                learning_rate=3e-4,
+                n_steps=2048,
+                batch_size=64,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                ent_coef=0.01,
+                verbose=1,
+            )
 
-        train_env.close()
+            print("\nHiperparámetros principales:")
+            print("learning_rate = 3e-4")
+            print("n_steps = 2048")
+            print("batch_size = 64")
+            print("gamma = 0.99")
+            print("gae_lambda = 0.95")
+            print("clip_range = 0.2")
+            print("ent_coef = 0.01")
 
-        print("Entrenamiento terminado.")
-        print(f"Modelo guardado en: {model_path}")
+            estimated_max_episodes = total_timesteps / train_env.max_steps
+
+            print("\nEstimación aproximada:")
+            print(f"Máximo de steps por episodio: {train_env.max_steps}")
+            print(f"Episodios aproximados de entrenamiento: {estimated_max_episodes:.2f}")
+            print("Nota: no es exacto, porque algunos episodios pueden terminar antes.")
+
+            model.learn(total_timesteps=total_timesteps)
+
+            model.save(model_path)
+            training_finished_correctly = True
+
+            print("\nEntrenamiento terminado correctamente.")
+            print(f"Modelo guardado en: {model_path}.zip")
+
+        except KeyboardInterrupt:
+            print("\nEntrenamiento interrumpido manualmente.")
+            print("Guardando checkpoint de emergencia...")
+
+            if model is not None:
+                try:
+                    model.save(checkpoint_path)
+                    print(f"Checkpoint guardado en: {checkpoint_path}.zip")
+                except Exception as save_error:
+                    print("No se pudo guardar el checkpoint.")
+                    print(f"Error al guardar: {save_error}")
+            else:
+                print("No existe ningún modelo inicializado para guardar.")
+
+        except Exception as error:
+            print("\nEl entrenamiento ha fallado.")
+            print(f"Tipo de error: {type(error).__name__}")
+            print(f"Mensaje: {error}")
+
+            if model is not None:
+                try:
+                    model.save(checkpoint_path)
+                    print(f"Checkpoint guardado en: {checkpoint_path}.zip")
+                except Exception as save_error:
+                    print("No se pudo guardar el checkpoint.")
+                    print(f"Error al guardar: {save_error}")
+            else:
+                print("No existe ningún modelo inicializado para guardar.")
+
+        finally:
+            if train_env is not None:
+                train_env.close()
 
     if TEST:
-        test_env = gym.make("RacingAnt-v0", render_mode="human")
+        print("\n==============================")
+        print("INICIO DE LA PRUEBA VISUAL")
+        print("==============================")
 
-        model = PPO.load(model_path)
+        model_to_load = None
 
-        num_episodes = 5
+        try:
+            if training_finished_correctly and os.path.exists(model_path + ".zip"):
+                model_to_load = model_path
+                print(f"Cargando modelo final: {model_path}.zip")
 
-        successful_episodes = 0
-        failed_episodes = 0
+            elif os.path.exists(checkpoint_path + ".zip"):
+                model_to_load = checkpoint_path
+                print("El entrenamiento no terminó correctamente.")
+                print(f"Cargando checkpoint: {checkpoint_path}.zip")
 
-        for episode in range(num_episodes):
-            obs, info = test_env.reset()
+            elif os.path.exists(model_path + ".zip"):
+                model_to_load = model_path
+                print("No se ha entrenado en esta ejecución, pero existe un modelo previo.")
+                print(f"Cargando modelo existente: {model_path}.zip")
 
-            total_reward = 0.0
-            max_x = 0.0
-            max_lateral_deviation = 0.0
+            else:
+                print("\nNo se ha encontrado ningún modelo para probar.")
+                print("Primero debe completarse un entrenamiento o existir un checkpoint.")
+                exit()
 
-            print(f"\n==============================")
-            print(f"EPISODIO DE PRUEBA {episode + 1}/{num_episodes}")
-            print(f"==============================")
+            model = PPO.load(model_to_load)
 
-            for step in range(test_env.unwrapped.max_steps):
-                action, _ = model.predict(obs, deterministic=True)
+        except Exception as error:
+            print("\nNo se ha podido cargar ningún modelo para la prueba.")
+            print(f"Tipo de error: {type(error).__name__}")
+            print(f"Mensaje: {error}")
+            exit()
 
-                obs, reward, terminated, truncated, info = test_env.step(action)
+        test_env = None
 
-                total_reward += reward
-                max_x = max(max_x, info["x_position"])
-                max_lateral_deviation = max(
-                    max_lateral_deviation,
-                    info["lateral_deviation"]
-                )
+        try:
+            test_env = gym.make("RacingAnt-v0", render_mode="human")
 
-                if step % 20 == 0:
-                    print(
-                        f"step={step:04d} | "
-                        f"t={info['elapsed_time']:.2f}s | "
-                        f"x={info['x_position']:.2f}m | "
-                        f"y={info['y_position']:.2f}m | "
-                        f"vx={info['x_velocity']:.2f}m/s | "
-                        f"dist={info['distance_to_goal']:.2f}m | "
-                        f"reward={reward:.2f}"
+            num_episodes = 5
+
+            successful_episodes = 0
+            failed_episodes = 0
+
+            for episode in range(num_episodes):
+                obs, info = test_env.reset()
+
+                total_reward = 0.0
+                max_x = 0.0
+                max_lateral_deviation = 0.0
+
+                print("\n==============================")
+                print(f"EPISODIO DE PRUEBA {episode + 1}/{num_episodes}")
+                print("==============================")
+                print("Método usado por el agente: PPO entrenado")
+
+                for step in range(test_env.unwrapped.max_steps):
+                    action, _ = model.predict(obs, deterministic=True)
+
+                    obs, reward, terminated, truncated, info = test_env.step(action)
+
+                    # Ralentiza el render para que se pueda ver.
+                    time.sleep(0.02)
+
+                    total_reward += reward
+                    max_x = max(max_x, info["x_position"])
+                    max_lateral_deviation = max(
+                        max_lateral_deviation,
+                        info["lateral_deviation"]
                     )
 
-                if terminated or truncated:
-                    break
+                    if step % 20 == 0:
+                        print(
+                            f"step={step:04d} | "
+                            f"t={info['elapsed_time']:.2f}s | "
+                            f"x={info['x_position']:.2f}m | "
+                            f"y={info['y_position']:.2f}m | "
+                            f"vx={info['x_velocity']:.2f}m/s | "
+                            f"vy={info['y_velocity']:.2f}m/s | "
+                            f"dist={info['distance_to_goal']:.2f}m | "
+                            f"lat_dev={info['lateral_deviation']:.2f}m | "
+                            f"reward={reward:.2f}"
+                        )
 
-            reached_goal = info["reached_goal"]
-            too_far_from_lane = info["too_far_from_lane"]
-            time_finished = info["elapsed_time"] >= test_env.unwrapped.max_time
+                    if terminated or truncated:
+                        break
 
-            if reached_goal:
-                successful_episodes += 1
-                result_message = "ÉXITO: el robot ha llegado a la meta."
-            else:
-                failed_episodes += 1
+                reached_goal = info["reached_goal"]
+                too_far_from_lane = info["too_far_from_lane"]
+                time_finished = info["elapsed_time"] >= test_env.unwrapped.max_time
 
-                if too_far_from_lane:
-                    result_message = "FALLO: el robot se ha salido de la pista."
-                elif time_finished:
-                    result_message = "FALLO: el robot no ha llegado antes de 20 segundos."
+                if reached_goal:
+                    successful_episodes += 1
+                    result_message = "ÉXITO: el robot ha llegado a la meta."
                 else:
-                    result_message = "FALLO: el episodio terminó por otra condición del entorno."
+                    failed_episodes += 1
 
-            print("\nResultado del episodio:")
-            print(result_message)
-            print(f"Steps ejecutados: {step + 1}/{test_env.unwrapped.max_steps}")
-            print(f"Tiempo final: {info['elapsed_time']:.2f}s")
-            print(f"Posición final X: {info['x_position']:.2f}m")
-            print(f"Posición final Y: {info['y_position']:.2f}m")
-            print(f"Máxima X alcanzada: {max_x:.2f}m")
-            print(f"Máxima desviación lateral: {max_lateral_deviation:.2f}m")
-            print(f"Distancia restante: {info['distance_to_goal']:.2f}m")
-            print(f"Recompensa total: {total_reward:.2f}")
+                    if too_far_from_lane:
+                        result_message = "FALLO: el robot se ha salido de la pista."
+                    elif time_finished:
+                        result_message = "FALLO: el robot no ha llegado antes de 20 segundos."
+                    else:
+                        result_message = "FALLO: el episodio terminó por otra condición del entorno."
 
-        print("\n==============================")
-        print("RESUMEN FINAL DE PRUEBA")
-        print("==============================")
-        print(f"Episodios totales: {num_episodes}")
-        print(f"Episodios exitosos: {successful_episodes}")
-        print(f"Episodios fallidos: {failed_episodes}")
-        print(f"Tasa de éxito: {(successful_episodes / num_episodes) * 100:.2f}%")
+                print("\nResultado del episodio:")
+                print(result_message)
+                print("Método de entrenamiento: PPO")
+                print(f"Modelo evaluado: {model_to_load}.zip")
+                print(f"Steps ejecutados: {step + 1}/{test_env.unwrapped.max_steps}")
+                print(f"Tiempo final: {info['elapsed_time']:.2f}s")
+                print(f"Posición final X: {info['x_position']:.2f}m")
+                print(f"Posición final Y: {info['y_position']:.2f}m")
+                print(f"Máxima X alcanzada: {max_x:.2f}m")
+                print(f"Máxima desviación lateral: {max_lateral_deviation:.2f}m")
+                print(f"Distancia restante: {info['distance_to_goal']:.2f}m")
+                print(f"Recompensa total: {total_reward:.2f}")
 
-        test_env.close()
+            print("\n==============================")
+            print("RESUMEN FINAL DE PRUEBA")
+            print("==============================")
+            print("Método evaluado: PPO")
+            print(f"Modelo evaluado: {model_to_load}.zip")
+            print(f"Episodios totales: {num_episodes}")
+            print(f"Episodios exitosos: {successful_episodes}")
+            print(f"Episodios fallidos: {failed_episodes}")
+            print(f"Tasa de éxito: {(successful_episodes / num_episodes) * 100:.2f}%")
+
+        except Exception as error:
+            print("\nLa prueba visual ha fallado.")
+            print(f"Tipo de error: {type(error).__name__}")
+            print(f"Mensaje: {error}")
+
+        finally:
+            if test_env is not None:
+                input("\nPrueba terminada. Pulsa ENTER para cerrar la ventana de render...")
+                test_env.close()
