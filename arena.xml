@@ -1,6 +1,9 @@
 <mujoco model="ai_olympics">
   <compiler angle="degree" inertiafromgeom="true" coordinate="local" />
   <option timestep="0.01" integrator="RK4" gravity="0 0 -9.81" />
+  <visual>
+    <global offwidth="640" offheight="480" />
+  </visual>
   <asset>
     <texture builtin="gradient" height="100" rgb1="1 1 1" rgb2="0 0 0" type="skybox" width="100" />
     <texture builtin="flat" height="1278" mark="cross" markrgb="1 1 1" name="ant/texgeom" random="0.01" rgb1="0.8 0.6 0.4" rgb2="0.8 0.6 0.4" type="cube" width="127" />
@@ -41,6 +44,7 @@
     <geom type="box" pos="50 0 0.015" size="55 0.05 0.005" rgba="0 0.85 1 0.5" contype="0" conaffinity="0" />
     <geom type="box" pos="50 -4 0.015" size="55 0.05 0.005" rgba="1 0.4 0.4 0.5" contype="0" conaffinity="0" />
     <geom type="box" pos="100.0 0 1" size="0.1 12 1" rgba="1 1 0 0.3" contype="0" conaffinity="0" />
+    <camera name="track" pos="0 -20 8" xyaxes="1 0 0 0 1 3" mode="trackcom" />
     <light cutoff="100" diffuse="1 1 1" dir="-0 0 -1.3" directional="true" exponent="1" pos="0  4    0.75" specular=".1 .1 .1" />
     <geom conaffinity="1" condim="3" material="ant/MatPlane" name="ant/floor" pos="0  4    0.75" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane" />
     <body name="ant/torso" pos="0  4    0.75">
